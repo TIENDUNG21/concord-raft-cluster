@@ -54,6 +54,7 @@ public sealed class SimCluster
     private readonly DeterministicRandom _random;
     private readonly Func<int, INodeApplication> _applicationFactory;
     private readonly List<IRaftObserver> _observers = new();
+    private readonly List<Action<int>> _restartHooks = new();
     private readonly SimNode[] _nodes;
     private readonly int[] _ids;
 
@@ -90,6 +91,49 @@ public sealed class SimCluster
     public SimNode this[int id] => _nodes[id - 1];
 
     public void AddObserver(IRaftObserver observer) => _observers.Add(observer);
+
+    /// <summary>Runs before a crashed node boots again (the invariant monitor resets its counters here).</summary>
+    public void OnRestart(Action<int> hook) => _restartHooks.Add(hook);
+
+    public int UpCount => _nodes.Count(n => n.IsUp);
+
+    /// <summary>
+    /// Kills a node: its volatile state is gone, its storage survives (every write was synced), and
+    /// timers or replies scheduled by this incarnation become no-ops.
+    /// </summary>
+    public void Crash(int id)
+    {
+        var node = this[id];
+        if (!node.IsUp)
+        {
+            return;
+        }
+
+        var wasLeader = node.Raft!.Role == RaftRole.Leader;
+        node.Raft = null;
+        node.Application = null;
+        node.ScheduledWakeup = null;
+        node.Incarnation++;
+        _trace.Add(TraceKind.Fault, id, wasLeader ? "crash (was leader)" : "crash");
+    }
+
+    /// <summary>Boots a crashed node from its durable storage.</summary>
+    public void Restart(int id)
+    {
+        var node = this[id];
+        if (node.IsUp)
+        {
+            return;
+        }
+
+        foreach (var hook in _restartHooks)
+        {
+            hook(id);
+        }
+
+        Boot(node);
+        _trace.Add(TraceKind.Fault, id, $"restart (term {node.Raft!.CurrentTerm}, log {node.Raft.LastLogIndex}, snapshot {node.Storage.SnapshotIndex})");
+    }
 
     /// <summary>Starts every node. Call once, after observers are registered.</summary>
     public void Start()

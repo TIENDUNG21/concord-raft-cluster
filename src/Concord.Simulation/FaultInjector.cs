@@ -12,9 +12,12 @@ public sealed record FaultOptions
 
     public bool LossBursts { get; init; } = true;
 
-    public static FaultOptions None => new() { Partitions = false, LossBursts = false };
+    /// <summary>Crash and restart nodes (at least one node always stays up).</summary>
+    public bool Crashes { get; init; } = true;
 
-    internal bool Any => Partitions || LossBursts;
+    public static FaultOptions None => new() { Partitions = false, LossBursts = false, Crashes = false };
+
+    internal bool Any => Partitions || LossBursts || Crashes;
 }
 
 /// <summary>
@@ -60,6 +63,10 @@ public sealed class FaultInjector
         _network.Heal();
         _network.Options = _baseline;
         _trace.Add(TraceKind.Fault, null, "heal: all links up, loss back to baseline");
+        foreach (var node in _cluster.Nodes.Where(n => !n.IsUp).ToArray())
+        {
+            _cluster.Restart(node.Id);
+        }
     }
 
     private void ScheduleNext(TimeSpan until)
@@ -93,6 +100,14 @@ public sealed class FaultInjector
         if (_options.LossBursts)
         {
             choices.Add(LossBurst);
+        }
+
+        if (_options.Crashes)
+        {
+            choices.Add(CrashRandom);
+            choices.Add(CrashLeader);
+            choices.Add(RestartRandom);
+            choices.Add(RestartRandom);
         }
 
         Injected++;
@@ -150,6 +165,36 @@ public sealed class FaultInjector
             _network.Options = _baseline;
             _trace.Add(TraceKind.Fault, null, "loss burst over");
         });
+    }
+
+    private void CrashRandom()
+    {
+        var up = _cluster.Nodes.Where(n => n.IsUp).Select(n => n.Id).ToArray();
+        if (up.Length > 1)
+        {
+            _cluster.Crash(_random.Pick(up));
+        }
+    }
+
+    private void CrashLeader()
+    {
+        if (_cluster.Leader() is { } leader && _cluster.UpCount > 1)
+        {
+            _cluster.Crash(leader.Id);
+        }
+        else
+        {
+            CrashRandom();
+        }
+    }
+
+    private void RestartRandom()
+    {
+        var down = _cluster.Nodes.Where(n => !n.IsUp).Select(n => n.Id).ToArray();
+        if (down.Length > 0)
+        {
+            _cluster.Restart(_random.Pick(down));
+        }
     }
 
     private void Shuffle(int[] items)

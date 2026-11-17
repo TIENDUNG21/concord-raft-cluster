@@ -66,6 +66,7 @@ public static class SimulationRunner
         var cluster = new SimCluster(sim, network, trace, config.Nodes, config.Raft, nodeRandom, _ => new ChecksumApplication());
         var monitor = new InvariantMonitor(id => cluster[id].Storage, () => sim.Now);
         cluster.AddObserver(monitor);
+        cluster.OnRestart(monitor.NodeRestarted);
         cluster.Start();
 
         var faults = new FaultInjector(sim, cluster, network, trace, faultRandom, config.Faults);
