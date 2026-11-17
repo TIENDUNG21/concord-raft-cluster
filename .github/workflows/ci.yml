@@ -35,3 +35,9 @@ jobs:
 
       - name: Test
         run: dotnet test Concord.sln -c Release --no-build --logger "console;verbosity=normal"
+
+      - name: Simulation seed sweep (10,000 seeds, must all pass)
+        run: dotnet src/Concord.Sim/bin/Release/net8.0/concord-sim.dll sweep --seeds 10000 --workers 4
+
+      - name: Harness self-check (an injected stale-read bug must be caught)
+        run: dotnet src/Concord.Sim/bin/Release/net8.0/concord-sim.dll sweep --seeds 300 --bug unsafe-reads --expect-failures --workers 4
