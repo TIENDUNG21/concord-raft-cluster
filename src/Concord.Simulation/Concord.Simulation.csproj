@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Concord.Simulation</RootNamespace>
+    <Description>Deterministic discrete-event simulator for Concord clusters: virtual time, seeded randomness, faulty network, crashes.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Concord.Core\Concord.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Concord.Simulation.Tests" />
+  </ItemGroup>
+
+</Project>
