@@ -27,10 +27,8 @@ public sealed partial class RaftNode
     private int? _votedFor;
     private RaftRole _role = RaftRole.Follower;
     private int? _leaderId;
-#pragma warning disable IDE0044 // Advanced by log replication (next step).
     private long _commitIndex;
     private long _lastApplied;
-#pragma warning restore IDE0044
     private (RaftRole Role, long Term, int? Leader) _lastNotified = (RaftRole.Follower, -1, null);
 
     public RaftNode(

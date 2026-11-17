@@ -33,6 +33,8 @@ public sealed partial class RaftNode
                 SendAppend(peer);
             }
         }
+
+        MaybeAdvanceCommit();
     }
 
     /// <summary>Heartbeat to every follower; also retransmits whatever is still unacknowledged.</summary>
@@ -111,6 +113,12 @@ public sealed partial class RaftNode
 
             if (existing is not null)
             {
+                if (entry.Index <= _commitIndex)
+                {
+                    throw new RaftSafetyException(
+                        $"Node {Id}: leader {append.From} (term {append.Term}) tried to overwrite committed entry {entry.Index}.");
+                }
+
                 _storage.TruncateFrom(entry.Index);
             }
 
@@ -118,7 +126,15 @@ public sealed partial class RaftNode
             break;
         }
 
+        // Only entries verified by this message may be committed: anything after lastNew could still be
+        // a stale suffix from an older term.
         var lastNew = prevIndex + entries.Count;
+        var leaderCommit = Math.Min(append.LeaderCommit, lastNew);
+        if (leaderCommit > _commitIndex)
+        {
+            SetCommitIndex(leaderCommit);
+        }
+
         Send(new AppendEntriesResponse(Id, append.From, _currentTerm, true, lastNew, 0, 0, append.Round));
     }
 
@@ -148,7 +164,8 @@ public sealed partial class RaftNode
                 progress.NextIndex = Math.Max(progress.NextIndex, progress.MatchIndex + 1);
             }
 
-            if (progress.NextIndex <= _storage.LastIndex)
+            MaybeAdvanceCommit();
+            if (_role == RaftRole.Leader && progress.NextIndex <= _storage.LastIndex)
             {
                 SendAppend(response.From);
             }
@@ -189,5 +206,59 @@ public sealed partial class RaftNode
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Commits the highest index stored on a majority, but only if that entry is from the current term
+    /// (Figure 8 of the Raft paper shows why counting replicas of older entries is unsafe).
+    /// </summary>
+    private void MaybeAdvanceCommit()
+    {
+        if (_role != RaftRole.Leader)
+        {
+            return;
+        }
+
+        Span<long> matched = stackalloc long[_members.Length];
+        matched[0] = _storage.LastIndex;
+        for (var i = 0; i < _peers.Length; i++)
+        {
+            matched[i + 1] = _progress[_peers[i]].MatchIndex;
+        }
+
+        matched.Sort();
+        var candidate = matched[_members.Length - _quorum];
+        if (candidate > _commitIndex && _storage.TermAt(candidate) == _currentTerm)
+        {
+            SetCommitIndex(candidate);
+        }
+    }
+
+    private void SetCommitIndex(long index)
+    {
+        _commitIndex = index;
+        foreach (var observer in _observers)
+        {
+            observer.Committed(Id, index);
+        }
+
+        ApplyCommitted();
+    }
+
+    private void ApplyCommitted()
+    {
+        while (_lastApplied < _commitIndex)
+        {
+            var batch = _storage.GetEntries(_lastApplied + 1, _commitIndex, 256);
+            foreach (var entry in batch)
+            {
+                _stateMachine.Apply(entry);
+                _lastApplied = entry.Index;
+                foreach (var observer in _observers)
+                {
+                    observer.Applied(Id, entry);
+                }
+            }
+        }
     }
 }

@@ -121,6 +121,11 @@ public sealed partial class RaftNode
         }
 
         NotifyRole();
+
+        // A leader may only commit entries of its own term by counting replicas (Raft paper 5.4.2).
+        // Appending a no-op lets it commit everything earlier terms left behind, and is what makes
+        // ReadIndex safe right after an election.
+        AppendLocal(LogEntry.CreateNoOp(_storage.LastIndex + 1, _currentTerm));
         BroadcastHeartbeat();
         _heartbeatDeadline = _clock.Now + _options.HeartbeatInterval;
         _checkQuorumDeadline = _clock.Now + _options.ElectionTimeoutMax;
