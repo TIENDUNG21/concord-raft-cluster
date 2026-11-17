@@ -101,7 +101,7 @@ internal static class Endpoints
                 status.LastApplied,
                 status.LastLogIndex,
                 status.SnapshotIndex,
-                settings.Members.OrderBy(m => m.Key).Select(m => new MemberResponse(m.Key, m.Value.ToString())).ToArray(),
+                settings.PublicUrls.OrderBy(m => m.Key).Select(m => new MemberResponse(m.Key, m.Value.ToString())).ToArray(),
                 status.Peers));
         });
 

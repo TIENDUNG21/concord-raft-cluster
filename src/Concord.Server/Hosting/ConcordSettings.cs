@@ -6,12 +6,18 @@ namespace Concord.Server.Hosting;
 /// <summary>
 /// Node configuration, read from the "Concord" section (command line, environment, appsettings).
 /// <c>PeerList</c> names every member including this node: "1=http://host-a:5161,2=http://host-b:5162,...".
+/// <c>PublicUrlList</c> (same format, optional) is what clients are redirected to when it differs from
+/// the address nodes use among themselves, as with published container ports.
 /// </summary>
 public sealed class ConcordSettings
 {
     public required int NodeId { get; init; }
 
+    /// <summary>Addresses nodes use to reach each other.</summary>
     public required IReadOnlyDictionary<int, Uri> Members { get; init; }
+
+    /// <summary>Addresses clients use; redirects and the status page point here.</summary>
+    public required IReadOnlyDictionary<int, Uri> PublicUrls { get; init; }
 
     public required string DataDirectory { get; init; }
 
@@ -19,7 +25,7 @@ public sealed class ConcordSettings
 
     public required TimeSpan RequestTimeout { get; init; }
 
-    public Uri? UrlOf(int? node) => node is { } id && Members.TryGetValue(id, out var url) ? url : null;
+    public Uri? UrlOf(int? node) => node is { } id && PublicUrls.TryGetValue(id, out var url) ? url : null;
 
     public static ConcordSettings From(IConfiguration configuration)
     {
@@ -30,6 +36,12 @@ public sealed class ConcordSettings
         if (!members.ContainsKey(nodeId))
         {
             throw new InvalidOperationException($"Concord:NodeId {nodeId} is not in Concord:PeerList ({string.Join(", ", members.Keys)}).");
+        }
+
+        var publicUrls = section["PublicUrlList"] is { Length: > 0 } list ? ParsePeers(list) : members;
+        if (!publicUrls.Keys.Order().SequenceEqual(members.Keys.Order()))
+        {
+            throw new InvalidOperationException("Concord:PublicUrlList must name the same node ids as Concord:PeerList.");
         }
 
         var raft = new RaftOptions
@@ -45,6 +57,7 @@ public sealed class ConcordSettings
         {
             NodeId = nodeId,
             Members = members,
+            PublicUrls = publicUrls,
             DataDirectory = section["DataDirectory"] is { Length: > 0 } dir ? dir : Path.Combine("data", "n" + nodeId.ToString(CultureInfo.InvariantCulture)),
             Raft = raft,
             RequestTimeout = TimeSpan.FromMilliseconds(Int(section, "RequestTimeoutMs", 5000)),
