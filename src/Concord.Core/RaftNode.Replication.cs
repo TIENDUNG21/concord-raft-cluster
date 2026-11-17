@@ -40,21 +40,39 @@ public sealed partial class RaftNode
     /// <summary>Heartbeat to every follower; also retransmits whatever is still unacknowledged.</summary>
     private void BroadcastHeartbeat()
     {
+        var now = _clock.Now;
         foreach (var peer in _peers)
         {
             var progress = _progress[peer];
-            if (progress.State == ReplicationState.Replicate)
+            switch (progress.State)
             {
-                progress.NextIndex = progress.MatchIndex + 1;
+                case ReplicationState.Replicate:
+                    progress.NextIndex = progress.MatchIndex + 1;
+                    SendAppend(peer);
+                    break;
+                case ReplicationState.Probe:
+                    SendAppend(peer);
+                    break;
+                case ReplicationState.Snapshot when now - progress.SnapshotSentAt >= _options.ElectionTimeoutMin:
+                    SendSnapshot(peer);
+                    break;
+                case ReplicationState.Snapshot:
+                    // Keep our authority while the snapshot is in flight.
+                    Send(new AppendEntries(Id, peer, _currentTerm, _storage.SnapshotIndex, _storage.SnapshotTerm, Array.Empty<LogEntry>(), _commitIndex, 0));
+                    break;
             }
-
-            SendAppend(peer);
         }
     }
 
     private void SendAppend(int peer)
     {
         var progress = _progress[peer];
+        if (progress.NextIndex <= _storage.SnapshotIndex)
+        {
+            SendSnapshot(peer);
+            return;
+        }
+
         var prevIndex = progress.NextIndex - 1;
         var prevTerm = _storage.TermAt(prevIndex)
             ?? throw new InvalidOperationException($"No term for index {prevIndex} while replicating to {peer}.");
@@ -79,26 +97,43 @@ public sealed partial class RaftNode
 
         var prevIndex = append.PrevLogIndex;
         IReadOnlyList<LogEntry> entries = append.Entries;
-        var prevTerm = _storage.TermAt(prevIndex);
-        if (prevTerm is null)
+        var snapshotIndex = _storage.SnapshotIndex;
+        if (prevIndex < snapshotIndex)
         {
-            // Our log is too short: ask the leader to continue right after our last entry.
-            Reject(append, _storage.LastIndex + 1, 0);
-            return;
-        }
-
-        if (prevTerm != append.PrevLogTerm)
-        {
-            // Point the leader at the first entry of the conflicting term so it can skip the whole term.
-            var conflictTerm = prevTerm.Value;
-            var first = prevIndex;
-            while (first - 1 > 0 && _storage.TermAt(first - 1) == conflictTerm)
+            // Entries up to our snapshot are committed, hence identical to the leader's: skip them.
+            var covered = snapshotIndex - prevIndex;
+            if (entries.Count <= covered)
             {
-                first--;
+                Send(new AppendEntriesResponse(Id, append.From, _currentTerm, true, snapshotIndex, 0, 0, append.Round));
+                return;
             }
 
-            Reject(append, first, conflictTerm);
-            return;
+            entries = entries.Skip((int)covered).ToArray();
+            prevIndex = snapshotIndex;
+        }
+        else
+        {
+            var prevTerm = _storage.TermAt(prevIndex);
+            if (prevTerm is null)
+            {
+                // Our log is too short: ask the leader to continue right after our last entry.
+                Reject(append, _storage.LastIndex + 1, 0);
+                return;
+            }
+
+            if (prevTerm != append.PrevLogTerm)
+            {
+                // Point the leader at the first entry of the conflicting term so it can skip the whole term.
+                var conflictTerm = prevTerm.Value;
+                var first = prevIndex;
+                while (first - 1 > snapshotIndex && _storage.TermAt(first - 1) == conflictTerm)
+                {
+                    first--;
+                }
+
+                Reject(append, first, conflictTerm);
+                return;
+            }
         }
 
         for (var i = 0; i < entries.Count; i++)
@@ -154,7 +189,7 @@ public sealed partial class RaftNode
         if (response.Success)
         {
             progress.MatchIndex = Math.Max(progress.MatchIndex, response.MatchIndex);
-            if (progress.State == ReplicationState.Probe)
+            if (progress.State != ReplicationState.Replicate)
             {
                 progress.State = ReplicationState.Replicate;
                 progress.NextIndex = progress.MatchIndex + 1;
@@ -170,7 +205,7 @@ public sealed partial class RaftNode
                 SendAppend(response.From);
             }
         }
-        else if (response.ConflictIndex > 0)
+        else if (response.ConflictIndex > 0 && progress.State != ReplicationState.Snapshot)
         {
             var next = response.ConflictIndex;
             if (response.ConflictTerm > 0)
@@ -260,5 +295,7 @@ public sealed partial class RaftNode
                 }
             }
         }
+
+        MaybeTakeSnapshot();
     }
 }

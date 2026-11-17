@@ -8,6 +8,9 @@ public enum ReplicationState
 
     /// <summary>Logs match up to MatchIndex; new entries are pipelined optimistically.</summary>
     Replicate,
+
+    /// <summary>The follower needs entries we compacted; a snapshot is on its way.</summary>
+    Snapshot,
 }
 
 /// <summary>What a leader knows about one follower.</summary>
@@ -23,4 +26,7 @@ internal sealed class PeerProgress(long nextIndex)
 
     /// <summary>The follower answered since the last check-quorum round.</summary>
     public bool RecentActive { get; set; } = true;
+
+    /// <summary>When the last InstallSnapshot was sent, to retry it if it got lost.</summary>
+    public TimeSpan SnapshotSentAt { get; set; }
 }

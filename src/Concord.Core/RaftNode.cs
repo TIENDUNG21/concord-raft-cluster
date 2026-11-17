@@ -170,6 +170,12 @@ public sealed partial class RaftNode
             case AppendEntriesResponse response:
                 HandleAppendEntriesResponse(response);
                 break;
+            case InstallSnapshot install:
+                HandleInstallSnapshot(install);
+                break;
+            case InstallSnapshotResponse response:
+                HandleInstallSnapshotResponse(response);
+                break;
         }
     }
 
@@ -180,6 +186,9 @@ public sealed partial class RaftNode
             case AppendEntries append:
                 // Tell the deposed leader about the newer term so it steps down.
                 Send(new AppendEntriesResponse(Id, append.From, _currentTerm, false, 0, 0, 0, append.Round));
+                break;
+            case InstallSnapshot install:
+                Send(new InstallSnapshotResponse(Id, install.From, _currentTerm, 0, install.Round));
                 break;
             case RequestVote request:
                 Send(new RequestVoteResponse(Id, request.From, _currentTerm, false, request.PreVote));
