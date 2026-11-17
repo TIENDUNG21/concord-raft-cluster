@@ -98,7 +98,7 @@ public sealed partial class RaftNode
     public IReadOnlyList<int> Members => _members;
 
     /// <summary>The earliest time at which <see cref="Tick"/> has work to do.</summary>
-    public TimeSpan NextDeadline => _role == RaftRole.Leader ? LeaderDeadline() : _electionDeadline;
+    public TimeSpan NextDeadline => _role == RaftRole.Leader ? LeaderDeadline() : FollowerDeadline();
 
     public void AddObserver(IRaftObserver observer)
     {
@@ -117,6 +117,10 @@ public sealed partial class RaftNode
         else if (now >= _electionDeadline)
         {
             StartElection();
+        }
+        else if (IsCampaigning && now >= _voteRetryDeadline)
+        {
+            RetransmitVoteRequests();
         }
     }
 
@@ -220,6 +224,11 @@ public sealed partial class RaftNode
 
     private bool IsLogUpToDate(long lastLogIndex, long lastLogTerm)
     {
+        if (_options.UnsafeIgnoreLogInVotes)
+        {
+            return true;
+        }
+
         var ourTerm = LastLogTerm;
         return lastLogTerm > ourTerm || (lastLogTerm == ourTerm && lastLogIndex >= _storage.LastIndex);
     }

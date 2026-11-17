@@ -26,6 +26,12 @@ public sealed class RaftOptions
     /// </summary>
     public bool CheckQuorum { get; init; } = true;
 
+    /// <summary>
+    /// DELIBERATELY UNSAFE, only reachable from the simulator: grant votes without the "candidate's log
+    /// is at least as up-to-date" check, so a leader can be elected without committed entries.
+    /// </summary>
+    internal bool UnsafeIgnoreLogInVotes { get; init; }
+
     public void Validate()
     {
         if (HeartbeatInterval <= TimeSpan.Zero)

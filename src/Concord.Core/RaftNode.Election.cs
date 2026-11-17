@@ -5,7 +5,9 @@ namespace Concord.Core;
 public sealed partial class RaftNode
 {
     private readonly HashSet<int> _votes = new();
+    private readonly HashSet<int> _answered = new();
     private TimeSpan _electionDeadline;
+    private TimeSpan _voteRetryDeadline;
     private TimeSpan _heartbeatDeadline;
     private TimeSpan _checkQuorumDeadline;
 
@@ -14,6 +16,36 @@ public sealed partial class RaftNode
         var min = (int)_options.ElectionTimeoutMin.TotalMilliseconds;
         var max = (int)_options.ElectionTimeoutMax.TotalMilliseconds;
         _electionDeadline = _clock.Now + TimeSpan.FromMilliseconds(_random.NextInt(min, max));
+    }
+
+    private bool IsCampaigning => _role is RaftRole.PreCandidate or RaftRole.Candidate;
+
+    private TimeSpan FollowerDeadline() =>
+        IsCampaigning && _voteRetryDeadline < _electionDeadline ? _voteRetryDeadline : _electionDeadline;
+
+    /// <summary>
+    /// Vote requests lost on the way would otherwise cost a whole election timeout; resend them every
+    /// heartbeat interval to the peers that have not answered this campaign.
+    /// </summary>
+    private void RetransmitVoteRequests()
+    {
+        SendVoteRequests(_role == RaftRole.PreCandidate, onlyUnanswered: true);
+    }
+
+    private void SendVoteRequests(bool preVote, bool onlyUnanswered)
+    {
+        var term = preVote ? _currentTerm + 1 : _currentTerm;
+        var lastIndex = _storage.LastIndex;
+        var lastTerm = LastLogTerm;
+        foreach (var peer in _peers)
+        {
+            if (!onlyUnanswered || !_answered.Contains(peer))
+            {
+                Send(new RequestVote(Id, peer, term, lastIndex, lastTerm, preVote));
+            }
+        }
+
+        _voteRetryDeadline = _clock.Now + _options.HeartbeatInterval;
     }
 
     private TimeSpan LeaderDeadline() =>
@@ -65,6 +97,7 @@ public sealed partial class RaftNode
         _leaderId = null;
         _votes.Clear();
         _votes.Add(Id);
+        _answered.Clear();
         ResetElectionTimer();
         NotifyRole();
 
@@ -74,12 +107,7 @@ public sealed partial class RaftNode
             return;
         }
 
-        var lastIndex = _storage.LastIndex;
-        var lastTerm = LastLogTerm;
-        foreach (var peer in _peers)
-        {
-            Send(new RequestVote(Id, peer, _currentTerm + 1, lastIndex, lastTerm, PreVote: true));
-        }
+        SendVoteRequests(preVote: true, onlyUnanswered: false);
     }
 
     private void BecomeCandidate()
@@ -91,6 +119,7 @@ public sealed partial class RaftNode
         _leaderId = null;
         _votes.Clear();
         _votes.Add(Id);
+        _answered.Clear();
         ResetElectionTimer();
         NotifyRole();
         NotifyVote(Id);
@@ -101,12 +130,7 @@ public sealed partial class RaftNode
             return;
         }
 
-        var lastIndex = _storage.LastIndex;
-        var lastTerm = LastLogTerm;
-        foreach (var peer in _peers)
-        {
-            Send(new RequestVote(Id, peer, _currentTerm, lastIndex, lastTerm, PreVote: false));
-        }
+        SendVoteRequests(preVote: false, onlyUnanswered: false);
     }
 
     private void BecomeLeader()
@@ -162,6 +186,7 @@ public sealed partial class RaftNode
         {
             if (_role == RaftRole.PreCandidate && response.Term == _currentTerm + 1 && response.Granted)
             {
+                _answered.Add(response.From);
                 _votes.Add(response.From);
                 if (_votes.Count >= _quorum)
                 {
@@ -172,7 +197,13 @@ public sealed partial class RaftNode
             return;
         }
 
-        if (_role != RaftRole.Candidate || response.Term != _currentTerm || !response.Granted)
+        if (_role != RaftRole.Candidate || response.Term != _currentTerm)
+        {
+            return;
+        }
+
+        _answered.Add(response.From);
+        if (!response.Granted)
         {
             return;
         }
