@@ -160,12 +160,13 @@ public static class LinearizabilityChecker
         where TState : notnull
     {
         var placed = new HashSet<int>(best);
+        const int Shown = 10;
         var lines = new List<string>
         {
-            $"no valid order exists; the longest legal prefix places {best.Length} of {history.Count} operations:",
+            $"no valid order exists; the longest legal prefix places {best.Length} of {history.Count} operations, ending with:",
         };
-        lines.AddRange(best.Select((id, i) => $"  {i + 1,3}. {Format(model, history[id])}"));
-        lines.Add("operations that could not be placed after it:");
+        lines.AddRange(best.Select((id, i) => (id, i)).TakeLast(Shown).Select(p => $"  {p.i + 1,4}. {Format(model, history[p.id])}"));
+        lines.Add("none of these can come next:");
         lines.AddRange(Enumerable.Range(0, history.Count)
             .Where(id => !placed.Contains(id))
             .OrderBy(id => history[id].Call)
