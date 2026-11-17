@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Concord.Checker</RootNamespace>
+    <Description>Linearizability checker for key-value histories (Wing and Gong search with Lowe's memoization, per-key partitioning).</Description>
+  </PropertyGroup>
+
+</Project>
