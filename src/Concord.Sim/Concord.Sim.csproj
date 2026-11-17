@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Concord.Sim</RootNamespace>
+    <AssemblyName>concord-sim</AssemblyName>
+    <Description>Command line for the Concord simulator: seed sweeps, single-seed replays and timeline export.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Concord.Simulation\Concord.Simulation.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Concord.Simulation.Tests" />
+  </ItemGroup>
+
+</Project>

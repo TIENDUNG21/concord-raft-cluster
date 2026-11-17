@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Concord.Simulation\Concord.Simulation.csproj" />
+    <ProjectReference Include="..\..\src\Concord.Sim\Concord.Sim.csproj" />
   </ItemGroup>
 
 </Project>
