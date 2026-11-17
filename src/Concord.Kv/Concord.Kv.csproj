@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Concord.Kv</RootNamespace>
+    <Description>Key-value state machine over Concord Raft: put, get, delete, compare-and-set, exactly-once client sessions, ReadIndex reads.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Concord.Core\Concord.Core.csproj" />
+  </ItemGroup>
+
+</Project>
