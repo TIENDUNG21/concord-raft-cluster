@@ -5,6 +5,8 @@
 [![CI](https://github.com/TIENDUNG21/concord-raft-cluster/actions/workflows/ci.yml/badge.svg)](https://github.com/TIENDUNG21/concord-raft-cluster/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-58a6ff.svg)](LICENSE)
 
+<p align="center"><img src="assets/banner.svg" width="100%" alt="Animated diagram: the leader crashes, a follower times out, wins the term 2 election and resumes heartbeats"></p>
+
 Concord is a key-value store replicated with Raft, written in C# for .NET 8. The Raft code has no I/O of
 its own, so the same code runs in an ASP.NET Core server and in a deterministic simulator where one
 64-bit seed reproduces a whole run, faults included, and every history the clients observe is checked
