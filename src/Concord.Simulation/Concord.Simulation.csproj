@@ -7,6 +7,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Concord.Core\Concord.Core.csproj" />
+    <ProjectReference Include="..\Concord.Kv\Concord.Kv.csproj" />
+    <ProjectReference Include="..\Concord.Checker\Concord.Checker.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -67,9 +67,9 @@ public sealed class KvStateMachine : IStateMachine
 
         var result = command.Operation switch
         {
-            KvOperation.Put => Put(command.Key, command.Value!),
-            KvOperation.Delete => new KvResult(_data.Remove(command.Key), null),
-            KvOperation.CompareAndSet => CompareAndSet(command.Key, command.Expected, command.Value!),
+            KvCommandType.Put => Put(command.Key, command.Value!),
+            KvCommandType.Delete => new KvResult(_data.Remove(command.Key), null),
+            KvCommandType.CompareAndSet => CompareAndSet(command.Key, command.Expected, command.Value!),
             _ => throw new InvalidOperationException($"Unknown operation {command.Operation}."),
         };
 

@@ -108,6 +108,7 @@ public sealed class FaultInjector
             choices.Add(CrashLeader);
             choices.Add(RestartRandom);
             choices.Add(RestartRandom);
+            choices.Add(Bounce);
         }
 
         Injected++;
@@ -186,6 +187,20 @@ public sealed class FaultInjector
         {
             CrashRandom();
         }
+    }
+
+    /// <summary>A process restart: down for a few milliseconds only, often in the middle of an election.</summary>
+    private void Bounce()
+    {
+        var up = _cluster.Nodes.Where(n => n.IsUp).Select(n => n.Id).ToArray();
+        if (up.Length <= 1)
+        {
+            return;
+        }
+
+        var id = _random.Pick(up);
+        _cluster.Crash(id);
+        _sim.After(TimeSpan.FromMilliseconds(_random.NextInt(1, 30)), () => _cluster.Restart(id));
     }
 
     private void RestartRandom()

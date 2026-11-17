@@ -2,7 +2,7 @@ using System.Text;
 
 namespace Concord.Kv;
 
-public enum KvOperation : byte
+public enum KvCommandType : byte
 {
     Put = 1,
     Delete = 2,
@@ -47,18 +47,18 @@ public static class KvLimits
 /// A write replicated through the Raft log. (<see cref="ClientId"/>, <see cref="Sequence"/>) identify
 /// it for exactly-once execution: a retried command is answered from the client's session instead of
 /// being applied twice. Client id 0 means "no session".
-/// For <see cref="KvOperation.CompareAndSet"/>, a null <see cref="Expected"/> means "only if absent".
+/// For <see cref="KvCommandType.CompareAndSet"/>, a null <see cref="Expected"/> means "only if absent".
 /// </summary>
-public sealed record KvCommand(long ClientId, long Sequence, KvOperation Operation, string Key, string? Value, string? Expected)
+public sealed record KvCommand(long ClientId, long Sequence, KvCommandType Operation, string Key, string? Value, string? Expected)
 {
     public static KvCommand Put(long clientId, long sequence, string key, string value) =>
-        new(clientId, sequence, KvOperation.Put, key, value, null);
+        new(clientId, sequence, KvCommandType.Put, key, value, null);
 
     public static KvCommand Delete(long clientId, long sequence, string key) =>
-        new(clientId, sequence, KvOperation.Delete, key, null, null);
+        new(clientId, sequence, KvCommandType.Delete, key, null, null);
 
     public static KvCommand CompareAndSet(long clientId, long sequence, string key, string? expected, string value) =>
-        new(clientId, sequence, KvOperation.CompareAndSet, key, value, expected);
+        new(clientId, sequence, KvCommandType.CompareAndSet, key, value, expected);
 
     /// <summary>Returns why the command is invalid, or null if it can be proposed.</summary>
     public string? Validate()
@@ -68,7 +68,7 @@ public sealed record KvCommand(long ClientId, long Sequence, KvOperation Operati
             return keyProblem;
         }
 
-        if (Operation is KvOperation.Put or KvOperation.CompareAndSet && Value is null)
+        if (Operation is KvCommandType.Put or KvCommandType.CompareAndSet && Value is null)
         {
             return $"{Operation} needs a value";
         }

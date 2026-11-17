@@ -19,10 +19,10 @@ public static class KvCommandCodec
         builder.WriteString(command.Key);
         switch (command.Operation)
         {
-            case KvOperation.Put:
+            case KvCommandType.Put:
                 builder.WriteString(command.Value);
                 break;
-            case KvOperation.CompareAndSet:
+            case KvCommandType.CompareAndSet:
                 builder.WriteString(command.Value);
                 builder.WriteString(command.Expected);
                 break;
@@ -40,15 +40,15 @@ public static class KvCommandCodec
             throw new KvFormatException($"Unsupported command version {version}.");
         }
 
-        var operation = (KvOperation)cursor.ReadByte();
+        var operation = (KvCommandType)cursor.ReadByte();
         var clientId = cursor.ReadInt64();
         var sequence = cursor.ReadInt64();
         var key = cursor.ReadString(KvLimits.MaxKeyLength * 4) ?? throw new KvFormatException("Command key is null.");
         KvCommand command = operation switch
         {
-            KvOperation.Put => KvCommand.Put(clientId, sequence, key, cursor.ReadString(KvLimits.MaxValueBytes) ?? throw new KvFormatException("Put value is null.")),
-            KvOperation.Delete => KvCommand.Delete(clientId, sequence, key),
-            KvOperation.CompareAndSet => ReadCompareAndSet(ref cursor, clientId, sequence, key),
+            KvCommandType.Put => KvCommand.Put(clientId, sequence, key, cursor.ReadString(KvLimits.MaxValueBytes) ?? throw new KvFormatException("Put value is null.")),
+            KvCommandType.Delete => KvCommand.Delete(clientId, sequence, key),
+            KvCommandType.CompareAndSet => ReadCompareAndSet(ref cursor, clientId, sequence, key),
             _ => throw new KvFormatException($"Unknown operation {(byte)operation}."),
         };
         cursor.ExpectEnd();

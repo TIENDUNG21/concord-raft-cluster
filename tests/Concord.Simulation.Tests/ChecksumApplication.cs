@@ -1,13 +1,13 @@
 using System.Buffers.Binary;
 using Concord.Core;
 
-namespace Concord.Simulation;
+namespace Concord.Simulation.Tests;
 
 /// <summary>
 /// The simplest replicated state machine: a count and a rolling hash of applied commands. Used for
 /// Raft-level simulations where only log agreement matters, not KV semantics.
 /// </summary>
-public sealed class ChecksumApplication : INodeApplication, IStateMachine
+internal sealed class ChecksumApplication : INodeApplication, IStateMachine
 {
     public long Count { get; private set; }
 

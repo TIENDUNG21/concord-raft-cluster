@@ -1,7 +1,27 @@
+using System.Globalization;
 using System.Text;
+using Concord.Checker;
 using Concord.Core;
+using Concord.Kv;
 
 namespace Concord.Simulation;
+
+/// <summary>
+/// Known-bad behaviours that can be switched on to prove the harness catches them. A test suite that
+/// has never failed proves little; these make it fail on purpose.
+/// </summary>
+public sealed record InjectedBugs
+{
+    /// <summary>Leaders answer reads from local state without ReadIndex: a deposed leader serves stale data.</summary>
+    public bool UnsafeLocalReads { get; init; }
+
+    /// <summary>Votes are granted without comparing logs, so a node missing committed entries can lead.</summary>
+    public bool IgnoreLogInVotes { get; init; }
+
+    public static InjectedBugs None { get; } = new();
+
+    public bool Any => UnsafeLocalReads || IgnoreLogInVotes;
+}
 
 /// <summary>Everything that defines a run. Together with the seed it fully determines the outcome.</summary>
 public sealed record SimulationConfig
@@ -13,8 +33,11 @@ public sealed record SimulationConfig
     /// <summary>Total virtual time.</summary>
     public TimeSpan Duration { get; init; } = TimeSpan.FromSeconds(12);
 
-    /// <summary>Faults are injected during [0, FaultWindow); then the network heals and the cluster must recover.</summary>
+    /// <summary>Faults are injected during [0, FaultWindow); then everything heals and the cluster must recover.</summary>
     public TimeSpan FaultWindow { get; init; } = TimeSpan.FromSeconds(8);
+
+    /// <summary>Clients stop issuing new operations this long before the end, so the cluster can settle.</summary>
+    public TimeSpan SettleTime { get; init; } = TimeSpan.FromSeconds(1.5);
 
     public RaftOptions Raft { get; init; } = new() { SnapshotThreshold = 200 };
 
@@ -22,13 +45,15 @@ public sealed record SimulationConfig
 
     public FaultOptions Faults { get; init; } = new();
 
-    /// <summary>How often the Raft-level workload proposes a command at the leader.</summary>
-    public TimeSpan ProposalInterval { get; init; } = TimeSpan.FromMilliseconds(15);
+    public WorkloadOptions Workload { get; init; } = new();
+
+    public InjectedBugs Bugs { get; init; } = InjectedBugs.None;
 }
 
 public enum FailureKind
 {
     Invariant,
+    Linearizability,
     Liveness,
     Exception,
 }
@@ -41,17 +66,31 @@ public sealed record SimulationStats(
     long MaxTerm,
     long CommittedEntries,
     int Faults,
+    int Operations,
+    int OperationsGivenUp,
     TimeSpan VirtualTime);
 
-public sealed record SimulationResult(ulong Seed, FailureKind? Failure, string? Message, SimulationStats Stats, SimTrace Trace)
+public sealed record SimulationResult(
+    ulong Seed,
+    FailureKind? Failure,
+    string? Message,
+    SimulationStats Stats,
+    SimTrace Trace,
+    IReadOnlyList<Timed<KvOperation>> History,
+    CheckResult? Linearizability)
 {
     public bool Passed => Failure is null;
 }
 
-/// <summary>Runs one seeded Raft-level simulation: random faults, a steady proposal stream, invariants, recovery.</summary>
+/// <summary>
+/// Runs one seeded simulation of a Concord cluster: random faults, KV clients, online Raft invariants,
+/// recovery after the fault window, and a linearizability check of everything the clients observed.
+/// </summary>
 public static class SimulationRunner
 {
-    public static SimulationResult Run(SimulationConfig config)
+    public const int FirstClientEndpoint = 101;
+
+    public static SimulationResult Run(SimulationConfig config, CheckOptions? checkOptions = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         var root = new DeterministicRandom(config.Seed);
@@ -63,7 +102,9 @@ public static class SimulationRunner
         var sim = new Simulator();
         var trace = new SimTrace(sim);
         var network = new SimNetwork(sim, networkRandom, config.Network, trace);
-        var cluster = new SimCluster(sim, network, trace, config.Nodes, config.Raft, nodeRandom, _ => new ChecksumApplication());
+        var serviceOptions = new KvServiceOptions { UnsafeLocalReads = config.Bugs.UnsafeLocalReads };
+        var raftOptions = config.Bugs.IgnoreLogInVotes ? CopyWithUnsafeVotes(config.Raft) : config.Raft;
+        var cluster = new SimCluster(sim, network, trace, config.Nodes, raftOptions, nodeRandom, _ => new KvApplication(serviceOptions));
         var monitor = new InvariantMonitor(id => cluster[id].Storage, () => sim.Now);
         cluster.AddObserver(monitor);
         cluster.OnRestart(monitor.NodeRestarted);
@@ -71,38 +112,32 @@ public static class SimulationRunner
 
         var faults = new FaultInjector(sim, cluster, network, trace, faultRandom, config.Faults);
         faults.Schedule(config.FaultWindow);
-        ScheduleProposals(sim, cluster, workloadRandom, config);
-        var probe = new LivenessProbe(sim, cluster, trace, config.FaultWindow);
 
-        FailureKind? failure = null;
-        string? message = null;
-        try
+        var history = new HistoryRecorder();
+        var stopIssuing = config.Duration - config.SettleTime;
+        var clients = Enumerable.Range(0, config.Workload.Clients)
+            .Select(i => new SimClient(FirstClientEndpoint + i, sim, network, cluster.Ids, workloadRandom.Fork(), config.Workload, history, trace))
+            .ToArray();
+        foreach (var client in clients)
         {
-            sim.RunUntil(config.Duration, () => monitor.Violation is not null);
-        }
-        catch (RaftSafetyException ex)
-        {
-            failure = FailureKind.Invariant;
-            message = ex.Message;
-        }
-#pragma warning disable CA1031 // Any exception from a node is a finding of the run, reported with its seed.
-        catch (Exception ex)
-#pragma warning restore CA1031
-        {
-            failure = FailureKind.Exception;
-            message = $"{ex.GetType().Name}: {ex.Message}";
+            client.Start(TimeSpan.FromMilliseconds(workloadRandom.NextInt(0, 50)), stopIssuing);
         }
 
-        if (failure is null && monitor.Violation is not null)
+        var (failure, message) = Execute(sim, config, monitor);
+        if (failure is null)
         {
-            failure = FailureKind.Invariant;
-            message = monitor.Violation;
+            (failure, message) = Liveness(cluster, clients, config);
         }
 
-        if (failure is null && probe.Check(cluster) is { } livenessProblem)
+        CheckResult? check = null;
+        if (failure is null)
         {
-            failure = FailureKind.Liveness;
-            message = livenessProblem;
+            check = KvLinearizability.Check(history.Operations, checkOptions);
+            if (check.Outcome == CheckOutcome.Illegal)
+            {
+                failure = FailureKind.Linearizability;
+                message = $"history of key {check.Partition} is not linearizable:\n{check.Explanation}";
+            }
         }
 
         if (message is not null)
@@ -118,18 +153,25 @@ public static class SimulationRunner
             monitor.MaxTerm,
             monitor.MaxApplied,
             faults.Injected,
+            history.Operations.Count,
+            clients.Sum(c => c.GaveUp),
             sim.Now);
-        return new SimulationResult(config.Seed, failure, message, stats, trace);
+        return new SimulationResult(config.Seed, failure, message, stats, trace, history.Operations, check);
     }
 
-    /// <summary>A compact, human-readable failure report: seed, verdict and the events that matter.</summary>
+    /// <summary>A compact, human-readable report: seed, verdict and the events that matter.</summary>
     public static string FormatReport(SimulationResult result, int maxEvents = 60)
     {
         ArgumentNullException.ThrowIfNull(result);
         var builder = new StringBuilder();
         builder.Append("seed ").Append(result.Seed).Append(": ")
-            .Append(result.Passed ? "passed" : $"FAILED ({result.Failure}) {result.Message}").Append('\n');
-        builder.Append("-- faults, elections and verdict --\n");
+            .Append(result.Passed ? "passed" : $"FAILED ({result.Failure})").Append('\n');
+        if (result.Message is not null)
+        {
+            builder.Append(result.Message).Append('\n');
+        }
+
+        builder.Append("-- faults, elections and verdict (virtual time) --\n");
         builder.Append(result.Trace.Format(
             e => e.Kind is TraceKind.Fault or TraceKind.Violation || (e.Kind == TraceKind.Role && e.Text.StartsWith("Leader", StringComparison.Ordinal)),
             maxEvents));
@@ -139,99 +181,67 @@ public static class SimulationRunner
             builder.Append(record).Append('\n');
         }
 
+        builder.Append("replay: concord-sim run --seed ").Append(result.Seed).Append(" --trace\n");
         return builder.ToString();
     }
 
-    private static void ScheduleProposals(Simulator sim, SimCluster cluster, DeterministicRandom random, SimulationConfig config)
+    private static RaftOptions CopyWithUnsafeVotes(RaftOptions options) => new()
     {
-        var stopAt = config.Duration - TimeSpan.FromSeconds(1);
-        void Tick()
+        HeartbeatInterval = options.HeartbeatInterval,
+        ElectionTimeoutMin = options.ElectionTimeoutMin,
+        ElectionTimeoutMax = options.ElectionTimeoutMax,
+        MaxEntriesPerMessage = options.MaxEntriesPerMessage,
+        SnapshotThreshold = options.SnapshotThreshold,
+        PreVote = options.PreVote,
+        CheckQuorum = options.CheckQuorum,
+        UnsafeIgnoreLogInVotes = true,
+    };
+
+    private static (FailureKind? Failure, string? Message) Execute(Simulator sim, SimulationConfig config, InvariantMonitor monitor)
+    {
+        try
         {
-            if (cluster.Leader() is { } leader)
-            {
-                var data = new byte[8];
-                for (var i = 0; i < data.Length; i++)
-                {
-                    data[i] = (byte)random.NextInt(0, 256);
-                }
-
-                cluster.WithNode(leader.Id, node => node.Propose(data));
-            }
-
-            if (sim.Now + config.ProposalInterval < stopAt)
-            {
-                sim.After(config.ProposalInterval, Tick);
-            }
+            sim.RunUntil(config.Duration, () => monitor.Violation is not null);
+        }
+        catch (RaftSafetyException ex)
+        {
+            return (FailureKind.Invariant, ex.Message);
+        }
+#pragma warning disable CA1031 // Any exception from a node is a finding of the run, reported with its seed.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            return (FailureKind.Exception, $"{ex.GetType().Name}: {ex.Message}");
         }
 
-        sim.After(config.ProposalInterval, Tick);
+        return monitor.Violation is null ? (null, null) : (FailureKind.Invariant, monitor.Violation);
     }
 
     /// <summary>
-    /// After the fault window the cluster must elect a leader, commit a fresh entry, and bring every node
-    /// up to date before the run ends.
+    /// After the fault window: every client must have finished its last operation, every node must be
+    /// up and have applied the same prefix, and some client operation must have succeeded.
     /// </summary>
-    private sealed class LivenessProbe
+    private static (FailureKind? Failure, string? Message) Liveness(SimCluster cluster, SimClient[] clients, SimulationConfig config)
     {
-        private static readonly byte[] Marker = "liveness-probe"u8.ToArray();
-        private readonly Simulator _sim;
-        private readonly SimTrace _trace;
-        private readonly TimeSpan _healAt;
-        private (long Index, long Term)? _attempt;
-        private TimeSpan _attemptAt;
-
-        public LivenessProbe(Simulator sim, SimCluster cluster, SimTrace trace, TimeSpan healAt)
+        if (clients.Select(c => c.ProtocolError).FirstOrDefault(e => e is not null) is { } protocolError)
         {
-            _sim = sim;
-            _trace = trace;
-            _healAt = healAt;
-            sim.Schedule(healAt, () => Poll(cluster));
+            return (FailureKind.Invariant, protocolError);
         }
 
-        public (long Index, long Term)? Committed { get; private set; }
-
-        public string? Check(SimCluster cluster)
+        var busy = clients.Count(c => !c.Idle);
+        if (busy > 0)
         {
-            if (Committed is not { } committed)
-            {
-                return $"no new entry was committed between the heal at {_healAt.TotalMilliseconds}ms and the end of the run";
-            }
-
-            var behind = cluster.Nodes.Where(n => n.Raft is null || n.Raft.LastApplied < committed.Index).Select(n => "n" + n.Id).ToArray();
-            return behind.Length == 0 ? null : $"nodes {string.Join(",", behind)} did not catch up to index {committed.Index} after heal";
+            return (FailureKind.Liveness, string.Create(CultureInfo.InvariantCulture, $"{busy} client(s) still waiting {config.SettleTime.TotalSeconds:0.0}s after they stopped issuing operations"));
         }
 
-        private void Poll(SimCluster cluster)
+        if (cluster.Nodes.Select(n => n.Raft?.LastApplied ?? -1).Distinct().Count() != 1)
         {
-            if (Committed is not null)
-            {
-                return;
-            }
-
-            var leader = cluster.Leader();
-            if (_attempt is { } attempt && leader is not null && leader.CommitIndex >= attempt.Index)
-            {
-                var term = cluster[leader.Id].Storage.TermAt(attempt.Index);
-                if (term == attempt.Term)
-                {
-                    Committed = attempt;
-                    _trace.Add(TraceKind.Commit, leader.Id, $"liveness probe committed at {attempt.Index}");
-                    return;
-                }
-            }
-
-            if (leader is not null && (_attempt is null || _sim.Now - _attemptAt > TimeSpan.FromMilliseconds(300)))
-            {
-                ProposeResult result = default;
-                cluster.WithNode(leader.Id, node => result = node.Propose(Marker));
-                if (result.Accepted)
-                {
-                    _attempt = (result.Index, result.Term);
-                    _attemptAt = _sim.Now;
-                }
-            }
-
-            _sim.After(TimeSpan.FromMilliseconds(20), () => Poll(cluster));
+            var applied = cluster.Nodes.Select(n => $"n{n.Id}:{(n.Raft is null ? "down" : n.Raft.LastApplied.ToString(CultureInfo.InvariantCulture))}");
+            return (FailureKind.Liveness, "nodes did not converge after the heal: last applied " + string.Join(", ", applied));
         }
+
+        return clients.Sum(c => c.Completed) == 0
+            ? (FailureKind.Liveness, "no client operation completed during the whole run")
+            : (null, null);
     }
 }
