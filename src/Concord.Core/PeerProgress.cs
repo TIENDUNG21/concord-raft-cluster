@@ -29,4 +29,15 @@ internal sealed class PeerProgress(long nextIndex)
 
     /// <summary>When the last InstallSnapshot was sent, to retry it if it got lost.</summary>
     public TimeSpan SnapshotSentAt { get; set; }
+
+    /// <summary>Highest heartbeat round the follower echoed in this term (ReadIndex confirmation).</summary>
+    public long AckedRound { get; private set; }
+
+    public void AcknowledgeRound(long round)
+    {
+        if (round > AckedRound)
+        {
+            AckedRound = round;
+        }
+    }
 }

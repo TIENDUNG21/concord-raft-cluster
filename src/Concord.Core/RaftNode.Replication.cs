@@ -58,7 +58,7 @@ public sealed partial class RaftNode
                     break;
                 case ReplicationState.Snapshot:
                     // Keep our authority while the snapshot is in flight.
-                    Send(new AppendEntries(Id, peer, _currentTerm, _storage.SnapshotIndex, _storage.SnapshotTerm, Array.Empty<LogEntry>(), _commitIndex, 0));
+                    Send(new AppendEntries(Id, peer, _currentTerm, _storage.SnapshotIndex, _storage.SnapshotTerm, Array.Empty<LogEntry>(), _commitIndex, _round));
                     break;
             }
         }
@@ -77,7 +77,7 @@ public sealed partial class RaftNode
         var prevTerm = _storage.TermAt(prevIndex)
             ?? throw new InvalidOperationException($"No term for index {prevIndex} while replicating to {peer}.");
         var entries = _storage.GetEntries(progress.NextIndex, _storage.LastIndex, _options.MaxEntriesPerMessage);
-        Send(new AppendEntries(Id, peer, _currentTerm, prevIndex, prevTerm, entries, _commitIndex, 0));
+        Send(new AppendEntries(Id, peer, _currentTerm, prevIndex, prevTerm, entries, _commitIndex, _round));
         if (progress.State == ReplicationState.Replicate && entries.Count > 0)
         {
             progress.NextIndex = entries[^1].Index + 1;
@@ -185,6 +185,7 @@ public sealed partial class RaftNode
 
         var progress = _progress[response.From];
         progress.RecentActive = true;
+        progress.AcknowledgeRound(response.Round);
 
         if (response.Success)
         {
@@ -221,6 +222,8 @@ public sealed partial class RaftNode
             progress.NextIndex = Math.Clamp(next, progress.MatchIndex + 1, _storage.LastIndex + 1);
             SendAppend(response.From);
         }
+
+        ServeReads();
     }
 
     /// <summary>The last index holding <paramref name="term"/> in our log, or 0 when we have none.</summary>
@@ -297,5 +300,6 @@ public sealed partial class RaftNode
         }
 
         MaybeTakeSnapshot();
+        ServeReads();
     }
 }

@@ -211,6 +211,7 @@ public sealed partial class RaftNode
         _progress.Clear();
         ResetElectionTimer();
         NotifyRole();
+        FailPendingReads();
     }
 
     private void PersistHardState() => _storage.SaveHardState(new HardState(_currentTerm, _votedFor));

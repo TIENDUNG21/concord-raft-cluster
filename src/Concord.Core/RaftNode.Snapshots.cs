@@ -34,7 +34,7 @@ public sealed partial class RaftNode
         var progress = _progress[peer];
         progress.State = ReplicationState.Snapshot;
         progress.SnapshotSentAt = _clock.Now;
-        Send(new InstallSnapshot(Id, peer, _currentTerm, snapshot, 0));
+        Send(new InstallSnapshot(Id, peer, _currentTerm, snapshot, _round));
     }
 
     private void HandleInstallSnapshot(InstallSnapshot install)
@@ -73,6 +73,7 @@ public sealed partial class RaftNode
 
         var progress = _progress[response.From];
         progress.RecentActive = true;
+        progress.AcknowledgeRound(response.Round);
         progress.MatchIndex = Math.Max(progress.MatchIndex, response.MatchIndex);
         progress.State = ReplicationState.Replicate;
         progress.NextIndex = progress.MatchIndex + 1;
@@ -81,5 +82,7 @@ public sealed partial class RaftNode
         {
             SendAppend(response.From);
         }
+
+        ServeReads();
     }
 }
