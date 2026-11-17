@@ -201,6 +201,7 @@ public sealed partial class RaftNode
         _role = RaftRole.Follower;
         _leaderId = leaderId;
         _votes.Clear();
+        _progress.Clear();
         ResetElectionTimer();
         NotifyRole();
     }

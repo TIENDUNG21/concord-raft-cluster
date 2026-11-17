@@ -4,6 +4,7 @@ namespace Concord.Core;
 
 public sealed partial class RaftNode
 {
+    private readonly Dictionary<int, PeerProgress> _progress = new();
     private TimeSpan _lastLeaderContact;
 
     private void BroadcastHeartbeat()
@@ -29,8 +30,13 @@ public sealed partial class RaftNode
         Send(new AppendEntriesResponse(Id, append.From, _currentTerm, true, 0, 0, 0, append.Round));
     }
 
-    private static void HandleAppendEntriesResponse(AppendEntriesResponse response)
+    private void HandleAppendEntriesResponse(AppendEntriesResponse response)
     {
-        _ = response;
+        if (_role != RaftRole.Leader)
+        {
+            return;
+        }
+
+        _progress[response.From].RecentActive = true;
     }
 }
