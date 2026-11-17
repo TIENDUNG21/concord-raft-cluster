@@ -12,6 +12,7 @@ internal static class Program
         usage:
           concord-sim sweep [--seeds N] [--start S] [--workers W] [--nodes 3|5|7] [--seconds T] [--bug NAME] [--expect-failures]
           concord-sim run --seed S [--nodes 3|5|7] [--seconds T] [--bug NAME] [--trace]
+          concord-sim timeline --seed S --out FILE.svg [--scenario leader-crash|random]
 
         Every run is fully determined by its seed. A failing seed prints a compact report; replay it
         with "run --seed S --trace" to see every event.
@@ -36,6 +37,7 @@ internal static class Program
             {
                 "sweep" => Sweep(command, output),
                 "run" => RunOne(command, output),
+                "timeline" => Timeline(command, output),
                 "help" => Help(output),
                 _ => throw new UsageException($"unknown command '{command.Command}'"),
             };
@@ -148,6 +150,35 @@ internal static class Program
             output.Write(SimulationRunner.FormatReport(result));
         }
 
+        return result.Passed ? 0 : 1;
+    }
+
+    private static int Timeline(CommandLine command, TextWriter output)
+    {
+        command.AllowOnly("seed", "out", "scenario", "nodes", "seconds");
+        var path = command.String("out") ?? throw new UsageException("timeline needs --out FILE.svg");
+        var seed = (ulong)command.Number("seed", 1, 0, long.MaxValue / 2);
+        var scenario = command.String("scenario") ?? "leader-crash";
+        var config = scenario switch
+        {
+            "leader-crash" => SimulationConfig.LeaderCrash(seed),
+            "random" => BuildConfig(command, seed),
+            _ => throw new UsageException($"unknown scenario '{scenario}'"),
+        };
+
+        var result = SimulationRunner.Run(config);
+        var title = scenario == "leader-crash"
+            ? "Leader crash and re-election, 5 nodes"
+            : Invariant($"Random faults, {config.Nodes} nodes");
+        var subtitle = Invariant($"concord-sim timeline --seed {seed} --scenario {scenario}   |   {result.Stats.Operations} client operations, {result.Stats.Elections} elections, linearizability: {result.Linearizability?.Outcome.ToString() ?? "not checked"}");
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (directory is not null)
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.WriteAllText(path, TimelineSvg.Render(result.Timeline, result.Trace, title, subtitle));
+        output.WriteLine(Invariant($"seed {seed}: {(result.Passed ? "passed" : "FAILED")}, timeline written to {path}"));
         return result.Passed ? 0 : 1;
     }
 

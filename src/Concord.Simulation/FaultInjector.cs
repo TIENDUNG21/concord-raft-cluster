@@ -1,5 +1,16 @@
 namespace Concord.Simulation;
 
+public enum ScriptAction
+{
+    CrashLeader,
+    RestartCrashed,
+    IsolateLeader,
+    Heal,
+}
+
+/// <summary>A fault at a fixed time, for reproducible scenarios such as "the leader crashes at 1.5 s".</summary>
+public sealed record ScriptStep(TimeSpan At, ScriptAction Action);
+
 /// <summary>Which faults a run may inject, and how often.</summary>
 public sealed record FaultOptions
 {
@@ -47,15 +58,44 @@ public sealed class FaultInjector
 
     public int Injected { get; private set; }
 
-    /// <summary>Schedules faults until <paramref name="until"/>, then a full heal at that time.</summary>
-    public void Schedule(TimeSpan until)
+    /// <summary>Schedules random faults and scripted steps until <paramref name="until"/>, then a full heal.</summary>
+    public void Schedule(TimeSpan until, IReadOnlyList<ScriptStep>? script = null)
     {
         if (_options.Any)
         {
             ScheduleNext(until);
         }
 
+        foreach (var step in script ?? Array.Empty<ScriptStep>())
+        {
+            _sim.Schedule(step.At, () => RunScripted(step.Action));
+        }
+
         _sim.Schedule(until, HealAll);
+    }
+
+    private void RunScripted(ScriptAction action)
+    {
+        Injected++;
+        switch (action)
+        {
+            case ScriptAction.CrashLeader:
+                CrashLeader();
+                break;
+            case ScriptAction.RestartCrashed:
+                foreach (var node in _cluster.Nodes.Where(n => !n.IsUp).ToArray())
+                {
+                    _cluster.Restart(node.Id);
+                }
+
+                break;
+            case ScriptAction.IsolateLeader:
+                IsolateLeader();
+                break;
+            case ScriptAction.Heal:
+                HealNetwork();
+                break;
+        }
     }
 
     public void HealAll()

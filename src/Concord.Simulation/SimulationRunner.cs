@@ -48,6 +48,28 @@ public sealed record SimulationConfig
     public WorkloadOptions Workload { get; init; } = new();
 
     public InjectedBugs Bugs { get; init; } = InjectedBugs.None;
+
+    /// <summary>Faults at fixed times, applied on top of (or instead of) the random ones.</summary>
+    public IReadOnlyList<ScriptStep> Script { get; init; } = Array.Empty<ScriptStep>();
+
+    /// <summary>
+    /// The scenario drawn in the README: five nodes, no random faults, the leader crashes at 1.5 s and
+    /// comes back at 3.5 s while clients keep writing.
+    /// </summary>
+    public static SimulationConfig LeaderCrash(ulong seed) => new()
+    {
+        Seed = seed,
+        Nodes = 5,
+        Duration = TimeSpan.FromSeconds(6),
+        FaultWindow = TimeSpan.FromSeconds(4.5),
+        SettleTime = TimeSpan.FromSeconds(1),
+        Faults = FaultOptions.None,
+        Script = new[]
+        {
+            new ScriptStep(TimeSpan.FromMilliseconds(1500), ScriptAction.CrashLeader),
+            new ScriptStep(TimeSpan.FromMilliseconds(3500), ScriptAction.RestartCrashed),
+        },
+    };
 }
 
 public enum FailureKind
@@ -77,7 +99,8 @@ public sealed record SimulationResult(
     SimulationStats Stats,
     SimTrace Trace,
     IReadOnlyList<Timed<KvOperation>> History,
-    CheckResult? Linearizability)
+    CheckResult? Linearizability,
+    TimelineRecorder Timeline)
 {
     public bool Passed => Failure is null;
 }
@@ -108,10 +131,14 @@ public static class SimulationRunner
         var monitor = new InvariantMonitor(id => cluster[id].Storage, () => sim.Now);
         cluster.AddObserver(monitor);
         cluster.OnRestart(monitor.NodeRestarted);
+        var timeline = new TimelineRecorder(cluster.Ids, () => sim.Now);
+        cluster.AddObserver(timeline);
+        cluster.OnCrash(timeline.Crashed);
+        cluster.OnRestart(timeline.Restarted);
         cluster.Start();
 
         var faults = new FaultInjector(sim, cluster, network, trace, faultRandom, config.Faults);
-        faults.Schedule(config.FaultWindow);
+        faults.Schedule(config.FaultWindow, config.Script);
 
         var history = new HistoryRecorder();
         var stopIssuing = config.Duration - config.SettleTime;
@@ -124,6 +151,7 @@ public static class SimulationRunner
         }
 
         var (failure, message) = Execute(sim, config, monitor);
+        timeline.Finish();
         if (failure is null)
         {
             (failure, message) = Liveness(cluster, clients, config);
@@ -156,7 +184,7 @@ public static class SimulationRunner
             history.Operations.Count,
             clients.Sum(c => c.GaveUp),
             sim.Now);
-        return new SimulationResult(config.Seed, failure, message, stats, trace, history.Operations, check);
+        return new SimulationResult(config.Seed, failure, message, stats, trace, history.Operations, check, timeline);
     }
 
     /// <summary>A compact, human-readable report: seed, verdict and the events that matter.</summary>

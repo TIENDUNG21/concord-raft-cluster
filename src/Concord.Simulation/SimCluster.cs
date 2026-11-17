@@ -55,6 +55,7 @@ public sealed class SimCluster
     private readonly Func<int, INodeApplication> _applicationFactory;
     private readonly List<IRaftObserver> _observers = new();
     private readonly List<Action<int>> _restartHooks = new();
+    private readonly List<Action<int>> _crashHooks = new();
     private readonly SimNode[] _nodes;
     private readonly int[] _ids;
 
@@ -95,6 +96,8 @@ public sealed class SimCluster
     /// <summary>Runs before a crashed node boots again (the invariant monitor resets its counters here).</summary>
     public void OnRestart(Action<int> hook) => _restartHooks.Add(hook);
 
+    public void OnCrash(Action<int> hook) => _crashHooks.Add(hook);
+
     public int UpCount => _nodes.Count(n => n.IsUp);
 
     /// <summary>
@@ -115,6 +118,10 @@ public sealed class SimCluster
         node.ScheduledWakeup = null;
         node.Incarnation++;
         _trace.Add(TraceKind.Fault, id, wasLeader ? "crash (was leader)" : "crash");
+        foreach (var hook in _crashHooks)
+        {
+            hook(id);
+        }
     }
 
     /// <summary>Boots a crashed node from its durable storage.</summary>
