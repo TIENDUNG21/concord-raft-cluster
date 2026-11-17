@@ -117,7 +117,7 @@ public sealed partial class RaftNode
         _progress.Clear();
         foreach (var peer in _peers)
         {
-            _progress[peer] = new PeerProgress();
+            _progress[peer] = new PeerProgress(_storage.LastIndex + 1);
         }
 
         NotifyRole();
