@@ -80,3 +80,5 @@ dotnet_diagnostic.CA1707.severity = none
 # Test helpers are intentionally small and local.
 dotnet_diagnostic.CA1515.severity = none
 dotnet_diagnostic.CA2007.severity = none
+# Inline expected arrays keep assertions readable.
+dotnet_diagnostic.CA1861.severity = none
