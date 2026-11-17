@@ -1,0 +1,37 @@
+# Three-node cluster. Nodes talk to each other as n1..n3:8080; clients use the published ports
+# 5161..5163, which is what redirects and /cluster/status advertise (PublicUrlList).
+x-node: &node
+  build: .
+  image: concord-raft-cluster:local
+  restart: unless-stopped
+  environment: &env
+    Concord__PeerList: "1=http://n1:8080,2=http://n2:8080,3=http://n3:8080"
+    Concord__PublicUrlList: "1=http://127.0.0.1:5161,2=http://127.0.0.1:5162,3=http://127.0.0.1:5163"
+
+services:
+  n1:
+    <<: *node
+    environment:
+      <<: *env
+      Concord__NodeId: "1"
+    ports: ["5161:8080"]
+    volumes: ["n1-data:/data"]
+  n2:
+    <<: *node
+    environment:
+      <<: *env
+      Concord__NodeId: "2"
+    ports: ["5162:8080"]
+    volumes: ["n2-data:/data"]
+  n3:
+    <<: *node
+    environment:
+      <<: *env
+      Concord__NodeId: "3"
+    ports: ["5163:8080"]
+    volumes: ["n3-data:/data"]
+
+volumes:
+  n1-data:
+  n2-data:
+  n3-data:

@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+.git/
+.github/
+.cluster/
+data/
+tests/
+docs/
+assets/
+*.md

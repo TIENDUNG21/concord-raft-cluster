@@ -36,8 +36,24 @@ jobs:
       - name: Test
         run: dotnet test Concord.sln -c Release --no-build --logger "console;verbosity=normal"
 
-      - name: Simulation seed sweep (10,000 seeds, must all pass)
-        run: dotnet src/Concord.Sim/bin/Release/net8.0/concord-sim.dll sweep --seeds 10000 --workers 4
+      - name: Simulation seed sweep (20,000 seeds, must all pass)
+        run: dotnet src/Concord.Sim/bin/Release/net8.0/concord-sim.dll sweep --seeds 20000 --workers 4
 
       - name: Harness self-check (an injected stale-read bug must be caught)
         run: dotnet src/Concord.Sim/bin/Release/net8.0/concord-sim.dll sweep --seeds 300 --bug unsafe-reads --expect-failures --workers 4
+
+      - name: Smoke test a local 3-node cluster
+        run: bash scripts/smoke.sh
+
+  docker:
+    name: Docker image and 3-node compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t concord-raft-cluster:local .
+
+      - name: Smoke test the compose cluster
+        run: MODE=compose bash scripts/smoke.sh
