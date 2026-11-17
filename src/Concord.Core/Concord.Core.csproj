@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Concord.Core</RootNamespace>
+    <Description>Sans-IO Raft consensus core: elections, pre-vote, replication, snapshots, ReadIndex.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Concord.Core.Tests" />
+  </ItemGroup>
+
+</Project>

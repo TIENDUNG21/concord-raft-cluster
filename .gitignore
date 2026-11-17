@@ -1,0 +1,23 @@
+# Build output
+bin/
+obj/
+artifacts/
+publish/
+
+# Test results and coverage
+TestResults/
+*.trx
+coverage*/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Local runtime state
+data/
+.cluster/
+.cache/
+*.log
